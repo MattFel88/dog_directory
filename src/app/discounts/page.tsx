@@ -1,105 +1,127 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { supabase } from '../../../lib/supabaseClient';
 import Navbar from '../../components/Navbar';
-import { useAuth } from '../../../lib/authContext';
+import BrandButton from '../../components/BrandButton';
+import { supabase } from '../../../lib/supabaseClient';
 
 type Discount = {
   id: string;
   business_id: string;
-  listing_ids: string[];
   title: string;
   description: string;
   code: string;
   active: boolean;
-  created_at: string;
+  expires_at?: string;
+  business?: {
+    name?: string;
+    website?: string;
+  };
 };
 
-type Listing = {
-  id: string;
-  name: string;
-  area: string;
+// Supabase returns business as an array, so we type that
+type DiscountRaw = Discount & {
+  business: { name?: string; website?: string }[];
 };
 
 export default function DiscountsPage() {
-  const { user } = useAuth();
   const [discounts, setDiscounts] = useState<Discount[]>([]);
-  const [listings, setListings] = useState<{ [id: string]: Listing }>({});
-  const [isPaid, setIsPaid] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState<string | null>(null);
 
-  // Get all discounts
   useEffect(() => {
-    async function loadDiscounts() {
-      const { data } = await supabase.from('discounts').select('*').eq('active', true).order('created_at', { ascending: false });
-      setDiscounts(data || []);
+    async function fetchDiscounts() {
+      setLoading(true);
+      // Get active discounts, join to business name
+      const { data } = await supabase
+        .from('discounts')
+        .select(`
+          id, business_id, title, description, code, active, expires_at,
+          business:business_id (name, website)
+        `)
+        .eq('active', true)
+        .order('expires_at', { ascending: true });
+
+      // Map: business as array to single object for our component
+      const normalised = (data || []).map((d: DiscountRaw) => ({
+        ...d,
+        business: Array.isArray(d.business) ? d.business[0] : d.business,
+      }));
+      setDiscounts(normalised);
+      setLoading(false);
     }
-    loadDiscounts();
+    fetchDiscounts();
   }, []);
 
-  // Get all listings referenced
-  useEffect(() => {
-    async function loadListings() {
-      const allIds = Array.from(new Set(discounts.flatMap(d => d.listing_ids)));
-      if (allIds.length === 0) return;
-      const { data } = await supabase.from('businesses').select('id,name,area').in('id', allIds);
-      const map: { [id: string]: Listing } = {};
-      if (data) data.forEach((l: Listing) => (map[l.id] = l));
-      setListings(map);
-    }
-    loadListings();
-  }, [discounts]);
-
-  // Check subscription status for current user
-  useEffect(() => {
-    async function checkSub() {
-      if (!user) return setIsPaid(false);
-      const { data } = await supabase.from('subscriptions').select('active').eq('user_id', user.id).eq('active', true).maybeSingle();
-      setIsPaid(!!data);
-    }
-    checkSub();
-  }, [user]);
+  function handleCopy(code: string) {
+    navigator.clipboard.writeText(code);
+    setCopied(code);
+    setTimeout(() => setCopied(null), 1500);
+  }
 
   return (
     <>
       <Navbar />
-      <main className="p-6 max-w-3xl mx-auto">
-        <h1 className="text-2xl font-bold mb-4">Available Discounts</h1>
-        <p className="mb-6 text-gray-700">Unlock these exclusive discounts by becoming a member!</p>
-        <div className="flex flex-col gap-6">
-          {discounts.length === 0 && <div>No discounts yet.</div>}
-          {discounts.map(discount => (
-            <div key={discount.id} className="border rounded p-4 shadow bg-white">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="font-semibold text-lg">{discount.title}</div>
-                  <div className="text-gray-600">{discount.description}</div>
-                  <div className="text-sm mt-2">
-                    {discount.listing_ids.map(listingId =>
-                      listings[listingId] ? (
-                        <span key={listingId} className="bg-green-100 rounded px-2 py-1 mr-2">{listings[listingId].name} ({listings[listingId].area})</span>
-                      ) : null
-                    )}
-                  </div>
-                </div>
-                <div className="mt-4 md:mt-0 md:ml-4 text-center">
-                  {isPaid ? (
-                    <span className="font-mono bg-green-600 text-white px-3 py-2 rounded text-lg">{discount.code}</span>
-                  ) : (
-                    <span className="font-mono bg-gray-200 text-gray-400 px-3 py-2 rounded text-lg select-none" title="Subscribe to unlock">
-                      ******
-                    </span>
-                  )}
-                </div>
+      <main className="max-w-4xl mx-auto px-4 py-12">
+        <h1 className="text-5xl font-bold text-center mb-2 text-[#68902b]">Exclusive Discounts</h1>
+        <p className="text-center text-[#68902b] mb-10 max-w-2xl mx-auto text-lg">
+          Enjoy special offers from our approved local partners. All discounts are verified, limited, and exclusive to our community!
+        </p>
+
+        {loading ? (
+          <div className="text-center py-20 text-2xl font-semibold text-[#68902b]">Loading discounts...</div>
+        ) : (
+          <>
+            {discounts.length === 0 ? (
+              <div className="text-center text-[#68902b] py-20 text-lg">
+                No active discounts available right now. Check back soon!
               </div>
-            </div>
-          ))}
-        </div>
-        {!isPaid && (
-          <div className="mt-8 p-4 bg-yellow-100 border rounded text-center">
-            <span className="font-semibold">Want these codes?</span> <br />
-            <span>Subscribe for instant access!</span>
-            {/* Replace with real link/payment page */}
-          </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                {discounts.map(discount => (
+                  <div key={discount.id} className="bg-white border-2 border-[#dbc7a1] rounded-3xl shadow-xl flex flex-col items-center p-8">
+                    <div className="w-full flex flex-col items-center mb-4">
+                      <div className="text-2xl font-bold text-[#68902b] text-center mb-1">
+                        {discount.title}
+                      </div>
+                      <div className="text-[#a3c75c] mb-2 text-center text-base font-semibold">
+                        {discount.business?.name || 'Business'}
+                      </div>
+                      <div className="text-gray-700 text-center mb-3 text-base min-h-[48px]">
+                        {discount.description}
+                      </div>
+                      {discount.expires_at && (
+                        <div className="text-sm text-[#68902b] mb-3">
+                          <span className="font-semibold">Expires: </span>
+                          {new Date(discount.expires_at).toLocaleDateString()}
+                        </div>
+                      )}
+                    </div>
+                    <div className="w-full flex flex-col items-center gap-3">
+                      <div className="text-xl font-mono bg-[#f6f3ee] border-2 border-[#a3c75c] rounded-full px-6 py-2 text-[#68902b] tracking-wider mb-2 select-all">
+                        {discount.code}
+                      </div>
+                      <BrandButton
+                        className="w-full justify-center"
+                        onClick={() => handleCopy(discount.code)}
+                      >
+                        {copied === discount.code ? 'Copied!' : 'Copy Discount Code'}
+                      </BrandButton>
+                      {discount.business?.website && (
+                        <a
+                          href={discount.business.website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-3 text-[#68902b] underline text-base hover:text-[#a3c75c]"
+                        >
+                          Visit Partner Website &rarr;
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </main>
     </>
